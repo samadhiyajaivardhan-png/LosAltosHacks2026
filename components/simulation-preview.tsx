@@ -242,8 +242,6 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
   const [error, setError] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [isStreaming, setIsStreaming] = useState(false)
   const [suggestedFollowUps, setSuggestedFollowUps] = useState<string[]>([])
   const handleSend = async () => {
     const trimmed = input.trim()
