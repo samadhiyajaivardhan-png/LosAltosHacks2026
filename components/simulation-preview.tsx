@@ -280,36 +280,76 @@ function stripInlineMarkdownMarkers(s: string): string {
   return s.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*]+)\*/g, "$1").replace(/\*\*/g, "").trim()
 }
 
-/** Remove leading scenario titles like "## Phoenix: …" or "**Phoenix: …**". */
-function stripLeadingScenarioTitle(text: string): string {
-  const lines = text.split(/\r?\n/)
-  let i = 0
-  while (i < lines.length && !lines[i].trim()) i++
-  if (i >= lines.length) return text
-  const line = lines[i].trim()
-  if (/^[-*]\s/.test(line)) return text
-  if (/^##+\s+/.test(line)) {
-    lines.splice(i, 1)
-    return stripLeadingScenarioTitle(lines.join("\n"))
-  }
-  if (/^\*\*[^*]+\*\*$/.test(line) && line.includes(":")) {
-    lines.splice(i, 1)
-    return stripLeadingScenarioTitle(lines.join("\n"))
-  }
-  // "City: Topic + Topic" (common model scenario header, with optional emoji / bold)
-  const titleLike =
-    /^[\s\uFE0F\p{Extended_Pictographic}]*(?:\*\*)?([^*\n]+?):\s*.+(?:\s*\+\s*.+)*(?:\*\*)?\s*$/u
-  if (titleLike.test(line) && line.length < 220 && !/^[-*]\s/.test(line)) {
-    lines.splice(i, 1)
-    return stripLeadingScenarioTitle(lines.join("\n"))
-  }
-  return text
+function isBulletOrNumberedLine(line: string): boolean {
+  const t = line.trimStart()
+  return /^[-*]\s/.test(t) || /^\d+\.\s/.test(t)
 }
 
-/** Remove intros, trailing emoji/orphans, stray markdown asterisks, and extra blank lines. */
+/** True when the line looks like a scenario banner (not body bullets). */
+function looksLikeScenarioBannerLine(line: string): boolean {
+  const t = line.trim()
+  if (!t || t.length > 320) return false
+  if (isBulletOrNumberedLine(t)) return false
+  if (/^#{1,6}\s/.test(t)) return true
+  if (/^\*\*[^*\n]+\*\*\s*$/.test(t) && t.includes(":")) return true
+  // Wrapped scenario title, e.g. (🌡️ Phoenix: … (Research-Estimated))
+  if (t.startsWith("(") && t.endsWith(")") && t.includes(":")) {
+    if (/\p{Extended_Pictographic}/u.test(t)) return true
+    if (/\b(Scenario|Research-Estimated|Research Estimated|Cooling Centers|Tree Canopy)\b/i.test(t)) return true
+  }
+  const hasEmoji = /\p{Extended_Pictographic}/u.test(t)
+  const hasColon = /:/.test(t)
+  if (!hasColon) return false
+  if (
+    hasEmoji &&
+    /\b(Scenario|Research-Estimated|Research Estimated|Cooling Centers|Tree Canopy|Intervention|Estimated)\b/i.test(t)
+  ) {
+    return true
+  }
+  // "City: +N …" style title row (often with emoji at start)
+  if (
+    hasEmoji &&
+    /^[\s(]*[\p{Extended_Pictographic}\s]+[A-Za-z][^:\n]{0,50}:\s*.+/u.test(t) &&
+    /\+?\d+|Centers|Canopy|heat/i.test(t)
+  ) {
+    return true
+  }
+  return false
+}
+
+/** Remove leading scenario titles, emoji banners, and markdown headings until bullets/content. */
+function stripLeadingScenarioNoise(text: string): string {
+  let lines = text.split(/\r?\n/)
+  let guard = 0
+  while (guard++ < 30 && lines.length) {
+    const line = lines[0].trim()
+    if (!line) {
+      lines.shift()
+      continue
+    }
+    if (isBulletOrNumberedLine(line)) break
+    if (looksLikeScenarioBannerLine(line)) {
+      lines.shift()
+      continue
+    }
+    break
+  }
+  return lines.join("\n")
+}
+
+/** Remove all emoji / pictographs so only text remains. */
+function stripAllEmojis(text: string): string {
+  return text
+    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/\uFE0F/g, "")
+    .replace(/  +/g, " ")
+    .replace(/^ +/gm, "")
+}
+
+/** Remove intros, trailing junk, emojis, stray markdown, and extra blank lines. */
 function sanitizeAssistantOutput(raw: string): string {
   let t = raw.trim()
-  t = stripLeadingScenarioTitle(t)
+  t = stripLeadingScenarioNoise(t)
   t = t.replace(/^Here's (?:the )?analysis for [^:\n]+:?\s*\n*/i, "")
   t = t.replace(/^Here is (?:the )?analysis for [^:\n]+:?\s*\n*/i, "")
   t = t.replace(/^Let me (?:break|walk) .+?:\s*\n*/i, "")
@@ -319,8 +359,10 @@ function sanitizeAssistantOutput(raw: string): string {
   t = t.replace(/(?:\n\s*---\s*)+$/g, "")
   t = t.replace(/(?:\n\s*[*_]{3,}\s*)+$/g, "")
   t = t.replace(/\n📌[\s\S]*$/u, "")
-  // Stray bold markers at end when markdown is malformed
   t = t.replace(/\s*\*{1,3}\s*$/g, "")
+
+  t = stripAllEmojis(t)
+  t = stripLeadingScenarioNoise(t)
 
   const lines = t.split(/\r?\n/)
   while (lines.length) {
@@ -334,12 +376,11 @@ function sanitizeAssistantOutput(raw: string): string {
       continue
     }
     const noEmoji = L.replace(/\p{Extended_Pictographic}/gu, "").replace(/\uFE0F/g, "").trim()
-    if (noEmoji.length === 0 && L.length <= 6) {
+    if (noEmoji.length === 0) {
       lines.pop()
       continue
     }
-    // Trailing line is only asterisks / punctuation
-    if (/^[\s*•]+$/.test(L)) {
+    if (/^[\s*•.]+$/.test(L)) {
       lines.pop()
       continue
     }
