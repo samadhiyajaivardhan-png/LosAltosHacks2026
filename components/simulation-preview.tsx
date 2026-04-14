@@ -314,6 +314,24 @@ function looksLikeScenarioBannerLine(line: string): boolean {
   ) {
     return true
   }
+  // Plain text (no emoji): "Phoenix: +10 Cooling Centers Scenario (Research-Estimated)"
+  if (
+    hasColon &&
+    /\bScenario\b/i.test(t) &&
+    /\(Research-Estimated\)|\(Research Estimated\)/i.test(t) &&
+    t.length < 280
+  ) {
+    return true
+  }
+  if (
+    hasColon &&
+    /^[A-Za-z][^:\n]{0,40}:\s*\+?\d*\s*.+/i.test(t) &&
+    /\b(Cooling Centers|Tree Canopy)\b/i.test(t) &&
+    /\bScenario\b/i.test(t) &&
+    t.length < 280
+  ) {
+    return true
+  }
   return false
 }
 
@@ -335,6 +353,39 @@ function stripLeadingScenarioNoise(text: string): string {
     break
   }
   return lines.join("\n")
+}
+
+/** Drop lines that are only markdown heading markers (e.g. ###, ##). */
+function stripStandaloneHeadingMarkerLines(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => {
+      const s = line.trim()
+      if (!s) return true
+      return !/^#{1,6}\s*$/.test(s)
+    })
+    .join("\n")
+}
+
+/** Remove trailing lines that are only # / --- / whitespace. */
+function stripTrailingNoiseLines(lines: string[]): string[] {
+  while (lines.length) {
+    const L = lines[lines.length - 1].trim()
+    if (!L) {
+      lines.pop()
+      continue
+    }
+    if (/^#{1,6}\s*$/.test(L)) {
+      lines.pop()
+      continue
+    }
+    if (/^[*_\-]{2,}\s*$/.test(L)) {
+      lines.pop()
+      continue
+    }
+    break
+  }
+  return lines
 }
 
 /** Remove all emoji / pictographs so only text remains. */
@@ -363,8 +414,10 @@ function sanitizeAssistantOutput(raw: string): string {
 
   t = stripAllEmojis(t)
   t = stripLeadingScenarioNoise(t)
+  t = stripStandaloneHeadingMarkerLines(t)
 
-  const lines = t.split(/\r?\n/)
+  let lines = t.split(/\r?\n/)
+  lines = stripTrailingNoiseLines(lines)
   while (lines.length) {
     const L = lines[lines.length - 1].trim()
     if (!L) {
@@ -387,7 +440,14 @@ function sanitizeAssistantOutput(raw: string): string {
     break
   }
   t = lines.join("\n")
+  t = stripStandaloneHeadingMarkerLines(t)
+  t = stripLeadingScenarioNoise(t)
   t = t.replace(/\s*\*+\s*$/g, "")
+  {
+    const tail = t.split(/\r?\n/)
+    stripTrailingNoiseLines(tail)
+    t = tail.join("\n")
+  }
   t = t.replace(/\n{3,}/g, "\n\n").trim()
   return t
 }
