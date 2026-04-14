@@ -437,127 +437,140 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
   ]
 
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-hidden">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10 bg-black/20 flex-shrink-0">
-        <div className="w-8 h-8 rounded-lg bg-lime-400/20 flex items-center justify-center">
-          <Sparkles className="w-4 h-4 text-lime-300" />
-        </div>
-        <div>
-          <span className="text-sm font-semibold text-white">AI Copilot</span>
-          <p className="text-[10px] text-neutral-500">City scenario planner</p>
-        </div>
-        <div className="ml-auto flex items-center gap-1.5">
-          <div className="w-1.5 h-1.5 rounded-full bg-lime-400 animate-pulse" />
-          <span className="text-[10px] text-lime-300">Live</span>
-        </div>
-      </div>
-
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto overflow-x-hidden p-4 min-h-0 min-w-0 overscroll-contain scroll-smooth"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden overscroll-contain scroll-smooth [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:h-0 [&::-webkit-scrollbar]:w-0"
       >
-        <div ref={scrollContentRef} className="space-y-4">
-          {error && (
-            <div className="flex gap-2.5 justify-start">
-              <div className="w-7 h-7 rounded-full bg-red-400/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-                <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
-              </div>
-              <div className="max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm bg-red-400/10 text-red-400 border border-red-400/30">{error}</div>
+        <div ref={scrollContentRef} className="flex min-h-full flex-col">
+          <div className="flex shrink-0 items-center gap-3 border-b border-white/10 bg-black/20 px-4 py-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-lime-400/20">
+              <Sparkles className="h-4 w-4 text-lime-300" />
             </div>
-          )}
-          {messages.length === 0 && !error ? (
-            <div className="flex flex-col items-center justify-center text-center gap-4 py-10 min-h-[200px]">
-              <Bot className="w-10 h-10 text-lime-300/30" />
-              <p className="text-neutral-500 text-xs max-w-[200px]">Ask about any city scenario — heat risk, floods, infrastructure, or resource planning.</p>
-              <div className="flex flex-col gap-2 w-full">
-                {suggestedPrompts.map((prompt) => (
-                  <button
-                    key={prompt}
-                    onClick={() => setInput(prompt)}
-                    className="text-left text-[11px] text-lime-300/70 border border-lime-300/20 rounded-lg px-3 py-2 hover:bg-lime-300/10 hover:border-lime-300/40 transition-all"
-                  >
-                    {prompt}
-                  </button>
-                ))}
-              </div>
+            <div>
+              <span className="text-sm font-semibold text-white">AI Copilot</span>
+              <p className="text-[10px] text-neutral-500">City scenario planner</p>
             </div>
-          ) : (
-            messages.map((msg) => (
-              <div key={msg.id} className={`flex gap-2.5 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                {msg.role === "assistant" && (
-                  <div className="w-7 h-7 rounded-full bg-lime-400/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <Bot className="w-3.5 h-3.5 text-lime-300" />
-                  </div>
-                )}
-                {msg.role === "assistant" ? (
-                  <div
-                    className="w-full min-w-0 max-w-full rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed break-words bg-white/5 text-white border border-white/10"
-                    dangerouslySetInnerHTML={{ __html: markdownToAssistantHtml(msg.content) }}
-                  />
-                ) : (
-                  <div className="max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed break-words bg-lime-400 text-black font-medium">
-                    {msg.content}
-                  </div>
-                )}
-                {msg.role === "user" && (
-                  <div className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <User className="w-3.5 h-3.5 text-white" />
-                  </div>
-                )}
+            <div className="ml-auto flex items-center gap-1.5">
+              <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-lime-400" />
+              <span className="text-[10px] text-lime-300">Live</span>
+            </div>
+          </div>
+
+          <div className="space-y-4 p-4">
+            {error && (
+              <div className="flex gap-2.5 justify-start">
+                <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-red-400/20">
+                  <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
+                </div>
+                <div className="max-w-[85%] rounded-2xl border border-red-400/30 bg-red-400/10 px-3.5 py-2.5 text-sm text-red-400">{error}</div>
               </div>
-            ))
-          )}
-          {isStreaming && messages[messages.length - 1]?.role !== "assistant" && (
-            <div className="flex gap-2.5 justify-start">
-              <div className="w-7 h-7 rounded-full bg-lime-400/20 flex items-center justify-center flex-shrink-0">
-                <Bot className="w-3.5 h-3.5 text-lime-300" />
-              </div>
-              <div className="bg-white/5 border border-white/10 rounded-2xl px-3.5 py-2.5">
-                <div className="flex gap-1">
-                  {[0, 150, 300].map((delay) => (
-                    <div key={delay} className="w-1.5 h-1.5 rounded-full bg-lime-300 animate-bounce" style={{ animationDelay: `${delay}ms` }} />
+            )}
+            {messages.length === 0 && !error ? (
+              <div className="flex min-h-[200px] flex-col items-center justify-center gap-4 py-10 text-center">
+                <Bot className="h-10 w-10 text-lime-300/30" />
+                <p className="max-w-[200px] text-xs text-neutral-500">
+                  Ask about any city scenario — heat risk, floods, infrastructure, or resource planning.
+                </p>
+                <div className="flex w-full flex-col gap-2">
+                  {suggestedPrompts.map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      onClick={() => setInput(prompt)}
+                      className="rounded-lg border border-lime-300/20 px-3 py-2 text-left text-[11px] text-lime-300/70 transition-all hover:border-lime-300/40 hover:bg-lime-300/10"
+                    >
+                      {prompt}
+                    </button>
                   ))}
                 </div>
               </div>
+            ) : (
+              messages.map((msg) => (
+                <div key={msg.id} className={`flex gap-2.5 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                  {msg.role === "assistant" && (
+                    <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-lime-400/20">
+                      <Bot className="h-3.5 w-3.5 text-lime-300" />
+                    </div>
+                  )}
+                  {msg.role === "assistant" ? (
+                    <div
+                      className="w-full min-w-0 max-w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm leading-relaxed break-words text-white"
+                      dangerouslySetInnerHTML={{ __html: markdownToAssistantHtml(msg.content) }}
+                    />
+                  ) : (
+                    <div className="max-w-[85%] rounded-2xl bg-lime-400 px-3.5 py-2.5 text-sm font-medium leading-relaxed break-words text-black">
+                      {msg.content}
+                    </div>
+                  )}
+                  {msg.role === "user" && (
+                    <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-white/10">
+                      <User className="h-3.5 w-3.5 text-white" />
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+            {isStreaming && messages[messages.length - 1]?.role !== "assistant" && (
+              <div className="flex gap-2.5 justify-start">
+                <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-lime-400/20">
+                  <Bot className="h-3.5 w-3.5 text-lime-300" />
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5">
+                  <div className="flex gap-1">
+                    {[0, 150, 300].map((delay) => (
+                      <div
+                        key={delay}
+                        className="h-1.5 w-1.5 animate-bounce rounded-full bg-lime-300"
+                        style={{ animationDelay: `${delay}ms` }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {suggestedFollowUps.length > 0 && !isStreaming && (
+            <div className="flex shrink-0 flex-col gap-1.5 px-3 pb-2">
+              {suggestedFollowUps.map((prompt, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => {
+                    setInput(prompt)
+                    setSuggestedFollowUps([])
+                  }}
+                  className="rounded-lg border border-lime-300/20 px-3 py-2 text-left text-[11px] text-lime-300/70 transition-all hover:border-lime-300/40 hover:bg-lime-300/10"
+                >
+                  {prompt}
+                </button>
+              ))}
             </div>
           )}
-        </div>
-      </div>
-      {suggestedFollowUps.length > 0 && !isStreaming && (
-        <div className="px-3 pb-2 flex flex-col gap-1.5">
-          {suggestedFollowUps.map((prompt, i) => (
-            <button
-              key={i}
-              onClick={() => {
-                setInput(prompt)
-                setSuggestedFollowUps([])
-              }}
-              className="text-left text-[11px] text-lime-300/70 border border-lime-300/20 rounded-lg px-3 py-2 hover:bg-lime-300/10 hover:border-lime-300/40 transition-all"
-            >
-              {prompt}
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="px-3 py-3 border-t border-white/10 bg-black/20 flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKey}
-            placeholder="Ask about any city scenario..."
-            disabled={isStreaming}
-            className="flex-1 bg-white/5 border border-white/10 rounded-full px-3.5 py-2 text-xs text-white placeholder:text-neutral-500 focus:outline-none focus:border-lime-300/50 transition-colors disabled:opacity-50"
-          />
-          <button
-            onClick={handleSend}
-            disabled={isStreaming || !input.trim()}
-            className="w-8 h-8 rounded-full bg-lime-400 flex items-center justify-center hover:bg-lime-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
-            aria-label="Send message"
-          >
-            <Send className="w-3.5 h-3.5 text-black" />
-          </button>
+
+          <div className="mt-auto shrink-0 border-t border-white/10 bg-black/20 px-3 py-3">
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKey}
+                placeholder="Ask about any city scenario..."
+                disabled={isStreaming}
+                className="flex-1 rounded-full border border-white/10 bg-white/5 px-3.5 py-2 text-xs text-white placeholder:text-neutral-500 transition-colors focus:border-lime-300/50 focus:outline-none disabled:opacity-50"
+              />
+              <button
+                type="button"
+                onClick={handleSend}
+                disabled={isStreaming || !input.trim()}
+                className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-lime-400 transition-colors hover:bg-lime-300 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Send message"
+              >
+                <Send className="h-3.5 w-3.5 text-black" />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1054,7 +1067,7 @@ export function SimulationPreview() {
               </div>
 
               {/* Middle: AI Copilot Chat */}
-              <div className="liquid-glass rounded-2xl border border-white/10 flex flex-col min-h-0 min-w-0 w-full overflow-hidden h-[min(640px,78vh)] max-h-[78vh] shrink-0">
+              <div className="liquid-glass flex h-full min-h-[520px] min-w-0 w-full flex-col overflow-hidden rounded-2xl border border-white/10 lg:min-h-0">
                 <AICopilotChat onSimResult={handleSimResult} />
               </div>
 
