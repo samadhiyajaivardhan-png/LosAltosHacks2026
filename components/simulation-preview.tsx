@@ -260,13 +260,82 @@ function parseNumberedFollowUpSection(section: string): string[] {
 }
 
 function extractSuggestedFollowUps(reply: string): { cleanReply: string; followUps: string[] } {
-  const idx = reply.search(/\d*\s*\*?\*?Suggested Follow[- ]Up Actions?\*?\*?\s*:?/i)
-  if (idx === -1) return { cleanReply: reply, followUps: [] }
+  let cut = reply
+  const idx = cut.search(/\d*\s*\*?\*?Suggested Follow[- ]Up Actions?\*?\*?\s*:?/i)
+  if (idx !== -1) {
+    cut = cut.slice(0, idx).replace(/\n+$/u, "").trimEnd()
+  }
+  // Trailing pin/suggested block some models emit after a rule line
+  cut = cut.replace(/\n---\s*\n+[\s\S]*?📌[\s\S]*$/u, "")
+  cut = cut.replace(/\n---\s*\n+\s*📌[\s\S]*$/u, "")
+  const after = idx !== -1
+    ? reply.slice(idx).replace(/^\d*\s*\*?\*?Suggested Follow[- ]Up Actions?\*?\*?\s*:?\s*\n?/i, "")
+    : ""
+  const followUps = idx !== -1 ? parseNumberedFollowUpSection(after) : []
+  return { cleanReply: cut, followUps }
+}
 
-  const cleanReply = reply.slice(0, idx).replace(/\n+$/u, "").trimEnd()
-  const after = reply.slice(idx).replace(/^\d*\s*\*?\*?Suggested Follow[- ]Up Actions?\*?\*?\s*:?\s*\n?/i, "")
-  const followUps = parseNumberedFollowUpSection(after)
-  return { cleanReply, followUps }
+/** Strip ** / * used as markdown so chips show plain text. */
+function stripInlineMarkdownMarkers(s: string): string {
+  return s.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*]+)\*/g, "$1").replace(/\*\*/g, "").trim()
+}
+
+/** Remove intros, trailing emoji/orphans, and extra blank lines from assistant body. */
+function sanitizeAssistantOutput(raw: string): string {
+  let t = raw.trim()
+  t = t.replace(/^Here's (?:the )?analysis for [^:\n]+:?\s*\n*/i, "")
+  t = t.replace(/^Here is (?:the )?analysis for [^:\n]+:?\s*\n*/i, "")
+  t = t.replace(/^Let me (?:break|walk) .+?:\s*\n*/i, "")
+  t = t.replace(/^(?:Below|Above) (?:is|are) .+?:\s*\n*/i, "")
+  t = t.replace(/^I've? (?:prepared|compiled|included) .+?:\s*\n*/i, "")
+  t = t.replace(/^\*{0,2}Analysis\*{0,2}\s*\n*/i, "")
+  // Trailing horizontal rules + whitespace
+  t = t.replace(/(?:\n\s*---\s*)+$/g, "")
+  t = t.replace(/(?:\n\s*[*_]{3,}\s*)+$/g, "")
+  t = t.replace(/\n📌[\s\S]*$/u, "")
+
+  const lines = t.split(/\r?\n/)
+  while (lines.length) {
+    const L = lines[lines.length - 1].trim()
+    if (!L) {
+      lines.pop()
+      continue
+    }
+    // lone pin / bookmark / lightbulb footer
+    if (/^(?:📌|🔖|💡|🗺️|📋)$/u.test(L)) {
+      lines.pop()
+      continue
+    }
+    // line is only emoji + whitespace (orphan footer)
+    const noEmoji = L.replace(/\p{Extended_Pictographic}/gu, "").replace(/\uFE0F/g, "").trim()
+    if (noEmoji.length === 0 && L.length <= 6) {
+      lines.pop()
+      continue
+    }
+    break
+  }
+  t = lines.join("\n")
+  t = t.replace(/\n{3,}/g, "\n\n").trim()
+  return t
+}
+
+function markdownToAssistantHtml(src: string): string {
+  const escaped = src
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+  let t = escaped
+    .replace(/^## (.+)$/gm, '<h3 style="color:white;font-weight:700;font-size:14px;margin:10px 0 6px;">$1</h3>')
+    .replace(/^### (.+)$/gm, '<h4 style="color:rgba(255,255,255,0.85);font-weight:600;font-size:13px;margin:8px 0 4px;">$1</h4>')
+    .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:10px 0;"/>')
+    .replace(/^\* (.+)$/gm, '<div style="display:flex;gap:8px;margin-bottom:6px;"><span style="color:#a3e635;flex-shrink:0;">•</span><span>$1</span></div>')
+    .replace(/^(\d+)\. (.+)$/gm, '<div style="display:flex;gap:8px;margin-bottom:6px;"><span style="color:#a3e635;font-weight:700;flex-shrink:0;">$1.</span><span>$2</span></div>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong style="color:white;font-weight:600;">$1</strong>')
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+  t = t.replace(/\n{3,}/g, "\n\n")
+  t = t.replace(/\n/g, "<br/>")
+  t = t.replace(/(?:<br\s*\/?>\s*){3,}/gi, "<br/><br/>")
+  return t
 }
 
 function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => void }) {
@@ -304,8 +373,9 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
       const reply: string = data.reply || "I encountered an issue processing your request."
 
       const { cleanReply, followUps } = extractSuggestedFollowUps(reply)
-      setSuggestedFollowUps(followUps.slice(0, 3))
-      const assistantMsg: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: cleanReply }
+      const polished = sanitizeAssistantOutput(cleanReply)
+      setSuggestedFollowUps(followUps.slice(0, 3).map(stripInlineMarkdownMarkers))
+      const assistantMsg: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: polished }
       setMessages((prev) => [...prev, assistantMsg])
 
       const cityMatch = cityHotspots.find((c) => reply.toLowerCase().includes(c.name.toLowerCase()))
@@ -367,7 +437,7 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
   ]
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-h-0 overflow-hidden">
       <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10 bg-black/20 flex-shrink-0">
         <div className="w-8 h-8 rounded-lg bg-lime-400/20 flex items-center justify-center">
           <Sparkles className="w-4 h-4 text-lime-300" />
@@ -396,7 +466,7 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
             </div>
           )}
           {messages.length === 0 && !error ? (
-            <div className="min-h-[min(360px,50vh)] flex flex-col items-center justify-center text-center gap-4 py-4">
+            <div className="flex flex-col items-center justify-center text-center gap-4 py-10 min-h-[200px]">
               <Bot className="w-10 h-10 text-lime-300/30" />
               <p className="text-neutral-500 text-xs max-w-[200px]">Ask about any city scenario — heat risk, floods, infrastructure, or resource planning.</p>
               <div className="flex flex-col gap-2 w-full">
@@ -419,20 +489,16 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
                     <Bot className="w-3.5 h-3.5 text-lime-300" />
                   </div>
                 )}
-                <div
-                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed break-words ${msg.role === "user" ? "bg-lime-400 text-black font-medium" : "bg-white/5 text-white border border-white/10"}`}
-                  dangerouslySetInnerHTML={{
-                    __html: msg.content
-                      .replace(/^## (.+)$/gm, '<h3 style="color:white;font-weight:700;font-size:14px;margin:12px 0 6px;">$1</h3>')
-                      .replace(/^### (.+)$/gm, '<h4 style="color:rgba(255,255,255,0.8);font-weight:600;font-size:13px;margin:10px 0 4px;">$1</h4>')
-                      .replace(/^---$/gm, '<hr style="border-color:rgba(255,255,255,0.1);margin:10px 0;"/>')
-                      .replace(/^\* (.+)$/gm, '<div style="display:flex;gap:6px;margin-bottom:4px;"><span style="color:#a3e635;">•</span><span>$1</span></div>')
-                      .replace(/^(\d+)\. (.+)$/gm, '<div style="display:flex;gap:6px;margin-bottom:4px;"><span style="color:#a3e635;font-weight:700;">$1.</span><span>$2</span></div>')
-                      .replace(/\*\*(.*?)\*\*/g, '<strong style="color:white;">$1</strong>')
-                      .replace(/\*(.*?)\*/g, '<em>$1</em>')
-                      .replace(/\n/g, '<br/>')
-                  }}
-                />
+                {msg.role === "assistant" ? (
+                  <div
+                    className="w-full min-w-0 max-w-full rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed break-words bg-white/5 text-white border border-white/10"
+                    dangerouslySetInnerHTML={{ __html: markdownToAssistantHtml(msg.content) }}
+                  />
+                ) : (
+                  <div className="max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed break-words bg-lime-400 text-black font-medium">
+                    {msg.content}
+                  </div>
+                )}
                 {msg.role === "user" && (
                   <div className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center flex-shrink-0 mt-0.5">
                     <User className="w-3.5 h-3.5 text-white" />
@@ -940,7 +1006,7 @@ export function SimulationPreview() {
         {/* Map + Chat + Live Feed */}
         <ScrollReveal delay={100}>
           <div className="w-full">
-            <div className="grid lg:grid-cols-[1fr_340px_280px] gap-5 items-stretch min-w-0">
+            <div className="grid lg:grid-cols-[1fr_500px_280px] gap-5 items-stretch min-w-0">
 
               {/* Left: Leaflet Map */}
               <div className="liquid-glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full">
@@ -988,7 +1054,7 @@ export function SimulationPreview() {
               </div>
 
               {/* Middle: AI Copilot Chat */}
-              <div className="liquid-glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full min-h-[620px] min-w-0">
+              <div className="liquid-glass rounded-2xl border border-white/10 flex flex-col min-h-0 min-w-0 w-full overflow-hidden h-[min(640px,78vh)] max-h-[78vh] shrink-0">
                 <AICopilotChat onSimResult={handleSimResult} />
               </div>
 
