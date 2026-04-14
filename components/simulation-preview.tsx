@@ -271,6 +271,7 @@ function extractSuggestedFollowUps(reply: string): { cleanReply: string; followU
 
 function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => void }) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollContentRef = useRef<HTMLDivElement>(null)
   const [input, setInput] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -326,15 +327,37 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
   }
 
   useLayoutEffect(() => {
+    const root = scrollRef.current
+    const content = scrollContentRef.current
+    if (!root) return
+
     const scrollToBottom = () => {
-      const el = scrollRef.current
-      if (el) el.scrollTop = el.scrollHeight
+      root.scrollTop = root.scrollHeight
     }
-    scrollToBottom()
-    const id = requestAnimationFrame(() => {
-      requestAnimationFrame(scrollToBottom)
+
+    let innerRaf = 0
+    const outerRaf = requestAnimationFrame(() => {
+      innerRaf = requestAnimationFrame(scrollToBottom)
     })
-    return () => cancelAnimationFrame(id)
+
+    let ro: ResizeObserver | undefined
+    if (content && typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => {
+        scrollToBottom()
+      })
+      ro.observe(content)
+    }
+
+    const t2 = window.setTimeout(scrollToBottom, 0)
+    const t3 = window.setTimeout(scrollToBottom, 100)
+
+    return () => {
+      cancelAnimationFrame(outerRaf)
+      cancelAnimationFrame(innerRaf)
+      window.clearTimeout(t2)
+      window.clearTimeout(t3)
+      ro?.disconnect()
+    }
   }, [messages, isStreaming, suggestedFollowUps])
 
   const suggestedPrompts = [
@@ -359,75 +382,80 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
         </div>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 scroll-smooth">
-        {error && (
-          <div className="flex gap-2.5 justify-start">
-            <div className="w-7 h-7 rounded-full bg-red-400/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-              <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto overflow-x-hidden p-4 min-h-0 min-w-0 overscroll-contain scroll-smooth"
+      >
+        <div ref={scrollContentRef} className="space-y-4">
+          {error && (
+            <div className="flex gap-2.5 justify-start">
+              <div className="w-7 h-7 rounded-full bg-red-400/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+              </div>
+              <div className="max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm bg-red-400/10 text-red-400 border border-red-400/30">{error}</div>
             </div>
-            <div className="max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm bg-red-400/10 text-red-400 border border-red-400/30">{error}</div>
-          </div>
-        )}
-        {messages.length === 0 && !error ? (
-          <div className="h-full flex flex-col items-center justify-center text-center gap-4 py-4">
-            <Bot className="w-10 h-10 text-lime-300/30" />
-            <p className="text-neutral-500 text-xs max-w-[200px]">Ask about any city scenario — heat risk, floods, infrastructure, or resource planning.</p>
-            <div className="flex flex-col gap-2 w-full">
-              {suggestedPrompts.map((prompt) => (
-                <button
-                  key={prompt}
-                  onClick={() => setInput(prompt)}
-                  className="text-left text-[11px] text-lime-300/70 border border-lime-300/20 rounded-lg px-3 py-2 hover:bg-lime-300/10 hover:border-lime-300/40 transition-all"
-                >
-                  {prompt}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          messages.map((msg) => (
-            <div key={msg.id} className={`flex gap-2.5 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-              {msg.role === "assistant" && (
-                <div className="w-7 h-7 rounded-full bg-lime-400/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <Bot className="w-3.5 h-3.5 text-lime-300" />
-                </div>
-              )}
-              <div
-                className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${msg.role === "user" ? "bg-lime-400 text-black font-medium" : "bg-white/5 text-white border border-white/10"}`}
-                dangerouslySetInnerHTML={{
-                  __html: msg.content
-                    .replace(/^## (.+)$/gm, '<h3 style="color:white;font-weight:700;font-size:14px;margin:12px 0 6px;">$1</h3>')
-                    .replace(/^### (.+)$/gm, '<h4 style="color:rgba(255,255,255,0.8);font-weight:600;font-size:13px;margin:10px 0 4px;">$1</h4>')
-                    .replace(/^---$/gm, '<hr style="border-color:rgba(255,255,255,0.1);margin:10px 0;"/>')
-                    .replace(/^\* (.+)$/gm, '<div style="display:flex;gap:6px;margin-bottom:4px;"><span style="color:#a3e635;">•</span><span>$1</span></div>')
-                    .replace(/^(\d+)\. (.+)$/gm, '<div style="display:flex;gap:6px;margin-bottom:4px;"><span style="color:#a3e635;font-weight:700;">$1.</span><span>$2</span></div>')
-                    .replace(/\*\*(.*?)\*\*/g, '<strong style="color:white;">$1</strong>')
-                    .replace(/\*(.*?)\*/g, '<em>$1</em>')
-                    .replace(/\n/g, '<br/>')
-                }}
-              />
-              {msg.role === "user" && (
-                <div className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <User className="w-3.5 h-3.5 text-white" />
-                </div>
-              )}
-            </div>
-          ))
-        )}
-        {isStreaming && messages[messages.length - 1]?.role !== "assistant" && (
-          <div className="flex gap-2.5 justify-start">
-            <div className="w-7 h-7 rounded-full bg-lime-400/20 flex items-center justify-center flex-shrink-0">
-              <Bot className="w-3.5 h-3.5 text-lime-300" />
-            </div>
-            <div className="bg-white/5 border border-white/10 rounded-2xl px-3.5 py-2.5">
-              <div className="flex gap-1">
-                {[0, 150, 300].map((delay) => (
-                  <div key={delay} className="w-1.5 h-1.5 rounded-full bg-lime-300 animate-bounce" style={{ animationDelay: `${delay}ms` }} />
+          )}
+          {messages.length === 0 && !error ? (
+            <div className="min-h-[min(360px,50vh)] flex flex-col items-center justify-center text-center gap-4 py-4">
+              <Bot className="w-10 h-10 text-lime-300/30" />
+              <p className="text-neutral-500 text-xs max-w-[200px]">Ask about any city scenario — heat risk, floods, infrastructure, or resource planning.</p>
+              <div className="flex flex-col gap-2 w-full">
+                {suggestedPrompts.map((prompt) => (
+                  <button
+                    key={prompt}
+                    onClick={() => setInput(prompt)}
+                    className="text-left text-[11px] text-lime-300/70 border border-lime-300/20 rounded-lg px-3 py-2 hover:bg-lime-300/10 hover:border-lime-300/40 transition-all"
+                  >
+                    {prompt}
+                  </button>
                 ))}
               </div>
             </div>
-          </div>
-        )}
+          ) : (
+            messages.map((msg) => (
+              <div key={msg.id} className={`flex gap-2.5 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                {msg.role === "assistant" && (
+                  <div className="w-7 h-7 rounded-full bg-lime-400/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <Bot className="w-3.5 h-3.5 text-lime-300" />
+                  </div>
+                )}
+                <div
+                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed break-words ${msg.role === "user" ? "bg-lime-400 text-black font-medium" : "bg-white/5 text-white border border-white/10"}`}
+                  dangerouslySetInnerHTML={{
+                    __html: msg.content
+                      .replace(/^## (.+)$/gm, '<h3 style="color:white;font-weight:700;font-size:14px;margin:12px 0 6px;">$1</h3>')
+                      .replace(/^### (.+)$/gm, '<h4 style="color:rgba(255,255,255,0.8);font-weight:600;font-size:13px;margin:10px 0 4px;">$1</h4>')
+                      .replace(/^---$/gm, '<hr style="border-color:rgba(255,255,255,0.1);margin:10px 0;"/>')
+                      .replace(/^\* (.+)$/gm, '<div style="display:flex;gap:6px;margin-bottom:4px;"><span style="color:#a3e635;">•</span><span>$1</span></div>')
+                      .replace(/^(\d+)\. (.+)$/gm, '<div style="display:flex;gap:6px;margin-bottom:4px;"><span style="color:#a3e635;font-weight:700;">$1.</span><span>$2</span></div>')
+                      .replace(/\*\*(.*?)\*\*/g, '<strong style="color:white;">$1</strong>')
+                      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                      .replace(/\n/g, '<br/>')
+                  }}
+                />
+                {msg.role === "user" && (
+                  <div className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <User className="w-3.5 h-3.5 text-white" />
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+          {isStreaming && messages[messages.length - 1]?.role !== "assistant" && (
+            <div className="flex gap-2.5 justify-start">
+              <div className="w-7 h-7 rounded-full bg-lime-400/20 flex items-center justify-center flex-shrink-0">
+                <Bot className="w-3.5 h-3.5 text-lime-300" />
+              </div>
+              <div className="bg-white/5 border border-white/10 rounded-2xl px-3.5 py-2.5">
+                <div className="flex gap-1">
+                  {[0, 150, 300].map((delay) => (
+                    <div key={delay} className="w-1.5 h-1.5 rounded-full bg-lime-300 animate-bounce" style={{ animationDelay: `${delay}ms` }} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
       {suggestedFollowUps.length > 0 && !isStreaming && (
         <div className="px-3 pb-2 flex flex-col gap-1.5">
@@ -690,8 +718,8 @@ function InterventionPlan({ simResult }: { simResult: SimResult | null }) {
       .replace(/\n{2,}/g, '<br/>')
 
   return (
-    <ScrollReveal delay={100} className="mt-10">
-      <div className="max-w-6xl mx-auto liquid-glass rounded-2xl border border-white/10 overflow-hidden">
+    <ScrollReveal delay={100} className="mt-10 w-full">
+      <div className="w-full liquid-glass rounded-2xl border border-white/10 overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 px-6 py-4 border-b border-white/10 bg-black/20">
           <div className="w-9 h-9 rounded-xl bg-lime-400/20 flex items-center justify-center">
@@ -911,8 +939,8 @@ export function SimulationPreview() {
 
         {/* Map + Chat + Live Feed */}
         <ScrollReveal delay={100}>
-          <div className="max-w-6xl mx-auto">
-            <div className="grid lg:grid-cols-[1fr_340px_280px] gap-5 items-stretch">
+          <div className="w-full">
+            <div className="grid lg:grid-cols-[1fr_340px_280px] gap-5 items-stretch min-w-0">
 
               {/* Left: Leaflet Map */}
               <div className="liquid-glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full">
@@ -960,7 +988,7 @@ export function SimulationPreview() {
               </div>
 
               {/* Middle: AI Copilot Chat */}
-              <div className="liquid-glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full min-h-[620px]">
+              <div className="liquid-glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full min-h-[620px] min-w-0">
                 <AICopilotChat onSimResult={handleSimResult} />
               </div>
 
@@ -981,7 +1009,7 @@ export function SimulationPreview() {
         <InterventionPlan simResult={simResult} />
 
         {/* Project Impact */}
-        <ScrollReveal delay={150} className="mt-20">
+        <ScrollReveal delay={150} className="mt-20 w-full">
           <div className="text-center mb-12">
             <p className="text-[11px] tracking-widest text-lime-300/80 mb-2">PROJECT IMPACT</p>
             <h2 className="text-3xl sm:text-4xl font-extrabold text-white mb-4">
@@ -992,7 +1020,7 @@ export function SimulationPreview() {
             </p>
           </div>
 
-          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6 w-full">
             {impactMetrics.map((metric, index) => (
               <ScrollReveal key={metric.label} delay={index * 100}>
                 <div className={`liquid-glass rounded-2xl p-6 h-full border ${metric.borderColor} glass-card-interactive group`}>
