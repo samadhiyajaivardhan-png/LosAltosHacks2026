@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState, useCallback } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react"
 import { ScrollReveal } from "./scroll-reveal"
 import {
   Send, Bot, User, Sparkles, MapPin, Shield, Zap, Target, TrendingUp,
@@ -236,6 +236,39 @@ interface ChatMessage {
   content: string
 }
 
+/** Parses "N Suggested Follow-Up Actions:" sections where each item may be split across lines (number line, then body). */
+function parseNumberedFollowUpSection(section: string): string[] {
+  const items: string[] = []
+  const lines = section.split(/\r?\n/)
+  const current: string[] = []
+  let inItem = false
+
+  for (const line of lines) {
+    const m = line.match(/^\s*(\d+)\.\s*(.*)$/)
+    if (m) {
+      if (inItem && current.length) items.push(current.join(" ").trim())
+      current.length = 0
+      inItem = true
+      const tail = m[2].trim()
+      if (tail) current.push(tail)
+    } else if (inItem && line.trim()) {
+      current.push(line.trim())
+    }
+  }
+  if (inItem && current.length) items.push(current.join(" ").trim())
+  return items.filter((s) => s.length >= 3)
+}
+
+function extractSuggestedFollowUps(reply: string): { cleanReply: string; followUps: string[] } {
+  const idx = reply.search(/\d*\s*\*?\*?Suggested Follow[- ]Up Actions?\*?\*?\s*:?/i)
+  if (idx === -1) return { cleanReply: reply, followUps: [] }
+
+  const cleanReply = reply.slice(0, idx).replace(/\n+$/u, "").trimEnd()
+  const after = reply.slice(idx).replace(/^\d*\s*\*?\*?Suggested Follow[- ]Up Actions?\*?\*?\s*:?\s*\n?/i, "")
+  const followUps = parseNumberedFollowUpSection(after)
+  return { cleanReply, followUps }
+}
+
 function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => void }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [input, setInput] = useState("")
@@ -248,6 +281,7 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
     if (!trimmed || isStreaming) return
     setError(null)
     setInput("")
+    setSuggestedFollowUps([])
 
     const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed }
     setMessages((prev) => [...prev, userMsg])
@@ -268,29 +302,7 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
       const data = await res.json()
       const reply: string = data.reply || "I encountered an issue processing your request."
 
-      const followUps: string[] = []
-      // Try multiple patterns to catch the follow-up section
-      const followUpPatterns = [
-        /(?:📌|🔖|💡)[^\n]*(?:Suggested|Follow[- ]Up|Next)[^\n]*\n([\s\S]*?)$/i,
-        /(?:Suggested Follow[- ]Up Actions?|Next Steps?|What(?:'s| is) Next)[^\n]*\n([\s\S]*?)$/i,
-        /\n\n(?:\d+\.\s+.+\n?){2,}$/,
-      ]
-
-      let cleanReply = reply
-      for (const pattern of followUpPatterns) {
-        const matched = cleanReply.match(pattern)
-        if (matched) {
-          const section = matched[1] || matched[0]
-          section.split('\n').forEach((line: string) => {
-            const match = line.match(/^\d+\.\s+\*?\*?([^*\n]{10,})\*?\*?/)
-            if (match) followUps.push(match[1].replace(/\*\*/g, '').trim())
-          })
-          if (followUps.length > 0) {
-            cleanReply = cleanReply.replace(pattern, '').trim()
-            break
-          }
-        }
-      }
+      const { cleanReply, followUps } = extractSuggestedFollowUps(reply)
       setSuggestedFollowUps(followUps.slice(0, 3))
       const assistantMsg: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: cleanReply }
       setMessages((prev) => [...prev, assistantMsg])
@@ -313,9 +325,17 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend() }
   }
 
-  useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-  }, [messages, isStreaming])
+  useLayoutEffect(() => {
+    const scrollToBottom = () => {
+      const el = scrollRef.current
+      if (el) el.scrollTop = el.scrollHeight
+    }
+    scrollToBottom()
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(scrollToBottom)
+    })
+    return () => cancelAnimationFrame(id)
+  }, [messages, isStreaming, suggestedFollowUps])
 
   const suggestedPrompts = [
     "What if Phoenix adds 10 cooling centers?",
@@ -940,7 +960,7 @@ export function SimulationPreview() {
               </div>
 
               {/* Middle: AI Copilot Chat */}
-              <div className="liquid-glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full min-h-[520px]">
+              <div className="liquid-glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full min-h-[620px]">
                 <AICopilotChat onSimResult={handleSimResult} />
               </div>
 
