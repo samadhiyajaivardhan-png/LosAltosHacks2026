@@ -280,19 +280,47 @@ function stripInlineMarkdownMarkers(s: string): string {
   return s.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*]+)\*/g, "$1").replace(/\*\*/g, "").trim()
 }
 
-/** Remove intros, trailing emoji/orphans, and extra blank lines from assistant body. */
+/** Remove leading scenario titles like "## Phoenix: …" or "**Phoenix: …**". */
+function stripLeadingScenarioTitle(text: string): string {
+  const lines = text.split(/\r?\n/)
+  let i = 0
+  while (i < lines.length && !lines[i].trim()) i++
+  if (i >= lines.length) return text
+  const line = lines[i].trim()
+  if (/^[-*]\s/.test(line)) return text
+  if (/^##+\s+/.test(line)) {
+    lines.splice(i, 1)
+    return stripLeadingScenarioTitle(lines.join("\n"))
+  }
+  if (/^\*\*[^*]+\*\*$/.test(line) && line.includes(":")) {
+    lines.splice(i, 1)
+    return stripLeadingScenarioTitle(lines.join("\n"))
+  }
+  // "City: Topic + Topic" (common model scenario header, with optional emoji / bold)
+  const titleLike =
+    /^[\s\uFE0F\p{Extended_Pictographic}]*(?:\*\*)?([^*\n]+?):\s*.+(?:\s*\+\s*.+)*(?:\*\*)?\s*$/u
+  if (titleLike.test(line) && line.length < 220 && !/^[-*]\s/.test(line)) {
+    lines.splice(i, 1)
+    return stripLeadingScenarioTitle(lines.join("\n"))
+  }
+  return text
+}
+
+/** Remove intros, trailing emoji/orphans, stray markdown asterisks, and extra blank lines. */
 function sanitizeAssistantOutput(raw: string): string {
   let t = raw.trim()
+  t = stripLeadingScenarioTitle(t)
   t = t.replace(/^Here's (?:the )?analysis for [^:\n]+:?\s*\n*/i, "")
   t = t.replace(/^Here is (?:the )?analysis for [^:\n]+:?\s*\n*/i, "")
   t = t.replace(/^Let me (?:break|walk) .+?:\s*\n*/i, "")
   t = t.replace(/^(?:Below|Above) (?:is|are) .+?:\s*\n*/i, "")
   t = t.replace(/^I've? (?:prepared|compiled|included) .+?:\s*\n*/i, "")
   t = t.replace(/^\*{0,2}Analysis\*{0,2}\s*\n*/i, "")
-  // Trailing horizontal rules + whitespace
   t = t.replace(/(?:\n\s*---\s*)+$/g, "")
   t = t.replace(/(?:\n\s*[*_]{3,}\s*)+$/g, "")
   t = t.replace(/\n📌[\s\S]*$/u, "")
+  // Stray bold markers at end when markdown is malformed
+  t = t.replace(/\s*\*{1,3}\s*$/g, "")
 
   const lines = t.split(/\r?\n/)
   while (lines.length) {
@@ -301,20 +329,24 @@ function sanitizeAssistantOutput(raw: string): string {
       lines.pop()
       continue
     }
-    // lone pin / bookmark / lightbulb footer
     if (/^(?:📌|🔖|💡|🗺️|📋)$/u.test(L)) {
       lines.pop()
       continue
     }
-    // line is only emoji + whitespace (orphan footer)
     const noEmoji = L.replace(/\p{Extended_Pictographic}/gu, "").replace(/\uFE0F/g, "").trim()
     if (noEmoji.length === 0 && L.length <= 6) {
+      lines.pop()
+      continue
+    }
+    // Trailing line is only asterisks / punctuation
+    if (/^[\s*•]+$/.test(L)) {
       lines.pop()
       continue
     }
     break
   }
   t = lines.join("\n")
+  t = t.replace(/\s*\*+\s*$/g, "")
   t = t.replace(/\n{3,}/g, "\n\n").trim()
   return t
 }
@@ -331,10 +363,12 @@ function markdownToAssistantHtml(src: string): string {
     .replace(/^\* (.+)$/gm, '<div style="display:flex;gap:8px;margin-bottom:6px;"><span style="color:#a3e635;flex-shrink:0;">•</span><span>$1</span></div>')
     .replace(/^(\d+)\. (.+)$/gm, '<div style="display:flex;gap:8px;margin-bottom:6px;"><span style="color:#a3e635;font-weight:700;flex-shrink:0;">$1.</span><span>$2</span></div>')
     .replace(/\*\*(.+?)\*\*/g, '<strong style="color:white;font-weight:600;">$1</strong>')
-    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(/\*([^*]+?)\*/g, "<em>$1</em>")
   t = t.replace(/\n{3,}/g, "\n\n")
   t = t.replace(/\n/g, "<br/>")
   t = t.replace(/(?:<br\s*\/?>\s*){3,}/gi, "<br/><br/>")
+  t = t.replace(/\*+$/g, "")
+  t = t.replace(/(?:<br\s*\/?>\s*)+$/gi, "")
   return t
 }
 
@@ -436,103 +470,104 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
     "How to reduce Chicago heat deaths by 30%?",
   ]
 
+  const hideScrollbar =
+    "[scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:h-0 [&::-webkit-scrollbar]:w-0"
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+      <div className="flex shrink-0 items-center gap-3 border-b border-white/10 bg-black/20 px-4 py-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-lime-400/20">
+          <Sparkles className="h-4 w-4 text-lime-300" />
+        </div>
+        <div>
+          <span className="text-sm font-semibold text-white">AI Copilot</span>
+          <p className="text-[10px] text-neutral-500">City scenario planner</p>
+        </div>
+        <div className="ml-auto flex items-center gap-1.5">
+          <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-lime-400" />
+          <span className="text-[10px] text-lime-300">Live</span>
+        </div>
+      </div>
+
       <div
         ref={scrollRef}
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden overscroll-contain scroll-smooth [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:h-0 [&::-webkit-scrollbar]:w-0"
+        className={`min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain scroll-smooth ${hideScrollbar}`}
       >
-        <div ref={scrollContentRef} className="flex min-h-full flex-col">
-          <div className="flex shrink-0 items-center gap-3 border-b border-white/10 bg-black/20 px-4 py-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-lime-400/20">
-              <Sparkles className="h-4 w-4 text-lime-300" />
-            </div>
-            <div>
-              <span className="text-sm font-semibold text-white">AI Copilot</span>
-              <p className="text-[10px] text-neutral-500">City scenario planner</p>
-            </div>
-            <div className="ml-auto flex items-center gap-1.5">
-              <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-lime-400" />
-              <span className="text-[10px] text-lime-300">Live</span>
-            </div>
-          </div>
-
-          <div className="space-y-4 p-4">
-            {error && (
-              <div className="flex gap-2.5 justify-start">
-                <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-red-400/20">
-                  <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
-                </div>
-                <div className="max-w-[85%] rounded-2xl border border-red-400/30 bg-red-400/10 px-3.5 py-2.5 text-sm text-red-400">{error}</div>
+        <div ref={scrollContentRef} className="space-y-4 p-4 pb-3">
+          {error && (
+            <div className="flex gap-2.5 justify-start">
+              <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-red-400/20">
+                <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
               </div>
-            )}
-            {messages.length === 0 && !error ? (
-              <div className="flex min-h-[200px] flex-col items-center justify-center gap-4 py-10 text-center">
-                <Bot className="h-10 w-10 text-lime-300/30" />
-                <p className="max-w-[200px] text-xs text-neutral-500">
-                  Ask about any city scenario — heat risk, floods, infrastructure, or resource planning.
-                </p>
-                <div className="flex w-full flex-col gap-2">
-                  {suggestedPrompts.map((prompt) => (
-                    <button
-                      key={prompt}
-                      type="button"
-                      onClick={() => setInput(prompt)}
-                      className="rounded-lg border border-lime-300/20 px-3 py-2 text-left text-[11px] text-lime-300/70 transition-all hover:border-lime-300/40 hover:bg-lime-300/10"
-                    >
-                      {prompt}
-                    </button>
+              <div className="max-w-[85%] rounded-2xl border border-red-400/30 bg-red-400/10 px-3.5 py-2.5 text-sm text-red-400">{error}</div>
+            </div>
+          )}
+          {messages.length === 0 && !error ? (
+            <div className="flex min-h-[200px] flex-col items-center justify-center gap-4 py-10 text-center">
+              <Bot className="h-10 w-10 text-lime-300/30" />
+              <p className="max-w-[200px] text-xs text-neutral-500">
+                Ask about any city scenario — heat risk, floods, infrastructure, or resource planning.
+              </p>
+              <div className="flex w-full flex-col gap-2">
+                {suggestedPrompts.map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    onClick={() => setInput(prompt)}
+                    className="rounded-lg border border-lime-300/20 px-3 py-2 text-left text-[11px] text-lime-300/70 transition-all hover:border-lime-300/40 hover:bg-lime-300/10"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            messages.map((msg) => (
+              <div key={msg.id} className={`flex gap-2.5 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                {msg.role === "assistant" && (
+                  <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-lime-400/20">
+                    <Bot className="h-3.5 w-3.5 text-lime-300" />
+                  </div>
+                )}
+                {msg.role === "assistant" ? (
+                  <div
+                    className="w-full min-w-0 max-w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm leading-relaxed break-words text-white [&_*:last-child]:mb-0"
+                    dangerouslySetInnerHTML={{ __html: markdownToAssistantHtml(msg.content) }}
+                  />
+                ) : (
+                  <div className="max-w-[85%] rounded-2xl bg-lime-400 px-3.5 py-2.5 text-sm font-medium leading-relaxed break-words text-black">
+                    {msg.content}
+                  </div>
+                )}
+                {msg.role === "user" && (
+                  <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-white/10">
+                    <User className="h-3.5 w-3.5 text-white" />
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+          {isStreaming && messages[messages.length - 1]?.role !== "assistant" && (
+            <div className="flex gap-2.5 justify-start">
+              <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-lime-400/20">
+                <Bot className="h-3.5 w-3.5 text-lime-300" />
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5">
+                <div className="flex gap-1">
+                  {[0, 150, 300].map((delay) => (
+                    <div
+                      key={delay}
+                      className="h-1.5 w-1.5 animate-bounce rounded-full bg-lime-300"
+                      style={{ animationDelay: `${delay}ms` }}
+                    />
                   ))}
                 </div>
               </div>
-            ) : (
-              messages.map((msg) => (
-                <div key={msg.id} className={`flex gap-2.5 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                  {msg.role === "assistant" && (
-                    <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-lime-400/20">
-                      <Bot className="h-3.5 w-3.5 text-lime-300" />
-                    </div>
-                  )}
-                  {msg.role === "assistant" ? (
-                    <div
-                      className="w-full min-w-0 max-w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm leading-relaxed break-words text-white"
-                      dangerouslySetInnerHTML={{ __html: markdownToAssistantHtml(msg.content) }}
-                    />
-                  ) : (
-                    <div className="max-w-[85%] rounded-2xl bg-lime-400 px-3.5 py-2.5 text-sm font-medium leading-relaxed break-words text-black">
-                      {msg.content}
-                    </div>
-                  )}
-                  {msg.role === "user" && (
-                    <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-white/10">
-                      <User className="h-3.5 w-3.5 text-white" />
-                    </div>
-                  )}
-                </div>
-              ))
-            )}
-            {isStreaming && messages[messages.length - 1]?.role !== "assistant" && (
-              <div className="flex gap-2.5 justify-start">
-                <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-lime-400/20">
-                  <Bot className="h-3.5 w-3.5 text-lime-300" />
-                </div>
-                <div className="rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5">
-                  <div className="flex gap-1">
-                    {[0, 150, 300].map((delay) => (
-                      <div
-                        key={delay}
-                        className="h-1.5 w-1.5 animate-bounce rounded-full bg-lime-300"
-                        style={{ animationDelay: `${delay}ms` }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {suggestedFollowUps.length > 0 && !isStreaming && (
-            <div className="flex shrink-0 flex-col gap-1.5 px-3 pb-2">
+            <div className="flex flex-col gap-1.5 pt-1">
               {suggestedFollowUps.map((prompt, i) => (
                 <button
                   key={i}
@@ -548,29 +583,29 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
               ))}
             </div>
           )}
+        </div>
+      </div>
 
-          <div className="mt-auto shrink-0 border-t border-white/10 bg-black/20 px-3 py-3">
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKey}
-                placeholder="Ask about any city scenario..."
-                disabled={isStreaming}
-                className="flex-1 rounded-full border border-white/10 bg-white/5 px-3.5 py-2 text-xs text-white placeholder:text-neutral-500 transition-colors focus:border-lime-300/50 focus:outline-none disabled:opacity-50"
-              />
-              <button
-                type="button"
-                onClick={handleSend}
-                disabled={isStreaming || !input.trim()}
-                className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-lime-400 transition-colors hover:bg-lime-300 disabled:cursor-not-allowed disabled:opacity-40"
-                aria-label="Send message"
-              >
-                <Send className="h-3.5 w-3.5 text-black" />
-              </button>
-            </div>
-          </div>
+      <div className="shrink-0 border-t border-white/10 bg-black/20 px-3 py-3">
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKey}
+            placeholder="Ask about any city scenario..."
+            disabled={isStreaming}
+            className="flex-1 rounded-full border border-white/10 bg-white/5 px-3.5 py-2 text-xs text-white placeholder:text-neutral-500 transition-colors focus:border-lime-300/50 focus:outline-none disabled:opacity-50"
+          />
+          <button
+            type="button"
+            onClick={handleSend}
+            disabled={isStreaming || !input.trim()}
+            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-lime-400 transition-colors hover:bg-lime-300 disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label="Send message"
+          >
+            <Send className="h-3.5 w-3.5 text-black" />
+          </button>
         </div>
       </div>
     </div>
@@ -657,7 +692,7 @@ function LiveSimulationFeed() {
   }, [fetchHistory])
 
   return (
-    <div className="liquid-glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full min-h-[520px]">
+    <div className="liquid-glass flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-white/10">
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10 bg-black/20 flex-shrink-0">
         <div className="w-8 h-8 rounded-lg bg-blue-400/20 flex items-center justify-center">
@@ -1019,10 +1054,10 @@ export function SimulationPreview() {
         {/* Map + Chat + Live Feed */}
         <ScrollReveal delay={100}>
           <div className="w-full">
-            <div className="grid lg:grid-cols-[1fr_500px_280px] gap-5 items-stretch min-w-0">
-
+            <div className="grid min-h-0 grid-cols-1 items-stretch gap-5 min-w-0 lg:grid-cols-[1fr_500px_280px]">
+              {/* Shared max height keeps row aligned; min-h-0 lets overflow scroll inside cells */}
               {/* Left: Leaflet Map */}
-              <div className="liquid-glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full">
+              <div className="liquid-glass flex h-full min-h-[480px] w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 lg:min-h-0 lg:h-[min(680px,78vh)] lg:max-h-[78vh]">
                 <div className="flex items-center justify-between px-5 py-3 border-b border-white/10 bg-black/20 flex-shrink-0">
                   <h3 className="text-sm font-semibold text-white flex items-center gap-2">
                     <MapPin className="w-4 h-4 text-lime-300" />
@@ -1067,12 +1102,12 @@ export function SimulationPreview() {
               </div>
 
               {/* Middle: AI Copilot Chat */}
-              <div className="liquid-glass flex h-full min-h-[520px] min-w-0 w-full flex-col overflow-hidden rounded-2xl border border-white/10 lg:min-h-0">
+              <div className="liquid-glass flex h-full min-h-[480px] w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 lg:min-h-0 lg:h-[min(680px,78vh)] lg:max-h-[78vh]">
                 <AICopilotChat onSimResult={handleSimResult} />
               </div>
 
               {/* Right: Live Simulation Feed */}
-              <div className="hidden lg:flex flex-col h-full">
+              <div className="hidden h-full min-h-0 w-full min-w-0 flex-col overflow-hidden lg:flex lg:h-[min(680px,78vh)] lg:max-h-[78vh]">
                 <LiveSimulationFeed />
               </div>
             </div>
