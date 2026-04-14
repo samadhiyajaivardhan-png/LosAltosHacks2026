@@ -260,17 +260,222 @@ function parseNumberedFollowUpSection(section: string): string[] {
 }
 
 function extractSuggestedFollowUps(reply: string): { cleanReply: string; followUps: string[] } {
-  const idx = reply.search(/\d*\s*\*?\*?Suggested Follow[- ]Up Actions?\*?\*?\s*:?/i)
-  if (idx === -1) return { cleanReply: reply, followUps: [] }
+  let cut = reply
+  const idx = cut.search(/\d*\s*\*?\*?Suggested Follow[- ]Up Actions?\*?\*?\s*:?/i)
+  if (idx !== -1) {
+    cut = cut.slice(0, idx).replace(/\n+$/u, "").trimEnd()
+  }
+  // Trailing pin/suggested block some models emit after a rule line
+  cut = cut.replace(/\n---\s*\n+[\s\S]*?📌[\s\S]*$/u, "")
+  cut = cut.replace(/\n---\s*\n+\s*📌[\s\S]*$/u, "")
+  const after = idx !== -1
+    ? reply.slice(idx).replace(/^\d*\s*\*?\*?Suggested Follow[- ]Up Actions?\*?\*?\s*:?\s*\n?/i, "")
+    : ""
+  const followUps = idx !== -1 ? parseNumberedFollowUpSection(after) : []
+  return { cleanReply: cut, followUps }
+}
 
-  const cleanReply = reply.slice(0, idx).replace(/\n+$/u, "").trimEnd()
-  const after = reply.slice(idx).replace(/^\d*\s*\*?\*?Suggested Follow[- ]Up Actions?\*?\*?\s*:?\s*\n?/i, "")
-  const followUps = parseNumberedFollowUpSection(after)
-  return { cleanReply, followUps }
+/** Strip ** / * used as markdown so chips show plain text. */
+function stripInlineMarkdownMarkers(s: string): string {
+  return s.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*]+)\*/g, "$1").replace(/\*\*/g, "").trim()
+}
+
+function isBulletOrNumberedLine(line: string): boolean {
+  const t = line.trimStart()
+  return /^[-*]\s/.test(t) || /^\d+\.\s/.test(t)
+}
+
+/** True when the line looks like a scenario banner (not body bullets). */
+function looksLikeScenarioBannerLine(line: string): boolean {
+  const t = line.trim()
+  if (!t || t.length > 320) return false
+  if (isBulletOrNumberedLine(t)) return false
+  if (/^#{1,6}\s/.test(t)) return true
+  if (/^\*\*[^*\n]+\*\*\s*$/.test(t) && t.includes(":")) return true
+  // Wrapped scenario title, e.g. (🌡️ Phoenix: … (Research-Estimated))
+  if (t.startsWith("(") && t.endsWith(")") && t.includes(":")) {
+    if (/\p{Extended_Pictographic}/u.test(t)) return true
+    if (/\b(Scenario|Research-Estimated|Research Estimated|Cooling Centers|Tree Canopy)\b/i.test(t)) return true
+  }
+  const hasEmoji = /\p{Extended_Pictographic}/u.test(t)
+  const hasColon = /:/.test(t)
+  if (!hasColon) return false
+  if (
+    hasEmoji &&
+    /\b(Scenario|Research-Estimated|Research Estimated|Cooling Centers|Tree Canopy|Intervention|Estimated)\b/i.test(t)
+  ) {
+    return true
+  }
+  // "City: +N …" style title row (often with emoji at start)
+  if (
+    hasEmoji &&
+    /^[\s(]*[\p{Extended_Pictographic}\s]+[A-Za-z][^:\n]{0,50}:\s*.+/u.test(t) &&
+    /\+?\d+|Centers|Canopy|heat/i.test(t)
+  ) {
+    return true
+  }
+  // Plain text (no emoji): "Phoenix: +10 Cooling Centers Scenario (Research-Estimated)"
+  if (
+    hasColon &&
+    /\bScenario\b/i.test(t) &&
+    /\(Research-Estimated\)|\(Research Estimated\)/i.test(t) &&
+    t.length < 280
+  ) {
+    return true
+  }
+  if (
+    hasColon &&
+    /^[A-Za-z][^:\n]{0,40}:\s*\+?\d*\s*.+/i.test(t) &&
+    /\b(Cooling Centers|Tree Canopy)\b/i.test(t) &&
+    /\bScenario\b/i.test(t) &&
+    t.length < 280
+  ) {
+    return true
+  }
+  return false
+}
+
+/** Remove leading scenario titles, emoji banners, and markdown headings until bullets/content. */
+function stripLeadingScenarioNoise(text: string): string {
+  let lines = text.split(/\r?\n/)
+  let guard = 0
+  while (guard++ < 30 && lines.length) {
+    const line = lines[0].trim()
+    if (!line) {
+      lines.shift()
+      continue
+    }
+    if (isBulletOrNumberedLine(line)) break
+    if (looksLikeScenarioBannerLine(line)) {
+      lines.shift()
+      continue
+    }
+    break
+  }
+  return lines.join("\n")
+}
+
+/** Drop lines that are only markdown heading markers (e.g. ###, ##). */
+function stripStandaloneHeadingMarkerLines(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => {
+      const s = line.trim()
+      if (!s) return true
+      return !/^#{1,6}\s*$/.test(s)
+    })
+    .join("\n")
+}
+
+/** Remove trailing lines that are only # / --- / whitespace. */
+function stripTrailingNoiseLines(lines: string[]): string[] {
+  while (lines.length) {
+    const L = lines[lines.length - 1].trim()
+    if (!L) {
+      lines.pop()
+      continue
+    }
+    if (/^#{1,6}\s*$/.test(L)) {
+      lines.pop()
+      continue
+    }
+    if (/^[*_\-]{2,}\s*$/.test(L)) {
+      lines.pop()
+      continue
+    }
+    break
+  }
+  return lines
+}
+
+/** Remove all emoji / pictographs so only text remains. */
+function stripAllEmojis(text: string): string {
+  return text
+    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/\uFE0F/g, "")
+    .replace(/  +/g, " ")
+    .replace(/^ +/gm, "")
+}
+
+/** Remove intros, trailing junk, emojis, stray markdown, and extra blank lines. */
+function sanitizeAssistantOutput(raw: string): string {
+  let t = raw.trim()
+  t = stripLeadingScenarioNoise(t)
+  t = t.replace(/^Here's (?:the )?analysis for [^:\n]+:?\s*\n*/i, "")
+  t = t.replace(/^Here is (?:the )?analysis for [^:\n]+:?\s*\n*/i, "")
+  t = t.replace(/^Let me (?:break|walk) .+?:\s*\n*/i, "")
+  t = t.replace(/^(?:Below|Above) (?:is|are) .+?:\s*\n*/i, "")
+  t = t.replace(/^I've? (?:prepared|compiled|included) .+?:\s*\n*/i, "")
+  t = t.replace(/^\*{0,2}Analysis\*{0,2}\s*\n*/i, "")
+  t = t.replace(/(?:\n\s*---\s*)+$/g, "")
+  t = t.replace(/(?:\n\s*[*_]{3,}\s*)+$/g, "")
+  t = t.replace(/\n📌[\s\S]*$/u, "")
+  t = t.replace(/\s*\*{1,3}\s*$/g, "")
+
+  t = stripAllEmojis(t)
+  t = stripLeadingScenarioNoise(t)
+  t = stripStandaloneHeadingMarkerLines(t)
+
+  let lines = t.split(/\r?\n/)
+  lines = stripTrailingNoiseLines(lines)
+  while (lines.length) {
+    const L = lines[lines.length - 1].trim()
+    if (!L) {
+      lines.pop()
+      continue
+    }
+    if (/^(?:📌|🔖|💡|🗺️|📋)$/u.test(L)) {
+      lines.pop()
+      continue
+    }
+    const noEmoji = L.replace(/\p{Extended_Pictographic}/gu, "").replace(/\uFE0F/g, "").trim()
+    if (noEmoji.length === 0) {
+      lines.pop()
+      continue
+    }
+    if (/^[\s*•.]+$/.test(L)) {
+      lines.pop()
+      continue
+    }
+    break
+  }
+  t = lines.join("\n")
+  t = stripStandaloneHeadingMarkerLines(t)
+  t = stripLeadingScenarioNoise(t)
+  t = t.replace(/\s*\*+\s*$/g, "")
+  {
+    const tail = t.split(/\r?\n/)
+    stripTrailingNoiseLines(tail)
+    t = tail.join("\n")
+  }
+  t = t.replace(/\n{3,}/g, "\n\n").trim()
+  return t
+}
+
+function markdownToAssistantHtml(src: string): string {
+  const escaped = src
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+  let t = escaped
+    .replace(/^## (.+)$/gm, '<h3 style="color:white;font-weight:700;font-size:14px;margin:10px 0 6px;">$1</h3>')
+    .replace(/^### (.+)$/gm, '<h4 style="color:rgba(255,255,255,0.85);font-weight:600;font-size:13px;margin:8px 0 4px;">$1</h4>')
+    .replace(/^---$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:10px 0;"/>')
+    .replace(/^\* (.+)$/gm, '<div style="display:flex;gap:8px;margin-bottom:6px;"><span style="color:#a3e635;flex-shrink:0;">•</span><span>$1</span></div>')
+    .replace(/^(\d+)\. (.+)$/gm, '<div style="display:flex;gap:8px;margin-bottom:6px;"><span style="color:#a3e635;font-weight:700;flex-shrink:0;">$1.</span><span>$2</span></div>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong style="color:white;font-weight:600;">$1</strong>')
+    .replace(/\*([^*]+?)\*/g, "<em>$1</em>")
+  t = t.replace(/\n{3,}/g, "\n\n")
+  t = t.replace(/\n/g, "<br/>")
+  t = t.replace(/(?:<br\s*\/?>\s*){3,}/gi, "<br/><br/>")
+  t = t.replace(/\*+$/g, "")
+  t = t.replace(/(?:<br\s*\/?>\s*)+$/gi, "")
+  return t
 }
 
 function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => void }) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollContentRef = useRef<HTMLDivElement>(null)
   const [input, setInput] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -303,8 +508,9 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
       const reply: string = data.reply || "I encountered an issue processing your request."
 
       const { cleanReply, followUps } = extractSuggestedFollowUps(reply)
-      setSuggestedFollowUps(followUps.slice(0, 3))
-      const assistantMsg: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: cleanReply }
+      const polished = sanitizeAssistantOutput(cleanReply)
+      setSuggestedFollowUps(followUps.slice(0, 3).map(stripInlineMarkdownMarkers))
+      const assistantMsg: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: polished }
       setMessages((prev) => [...prev, assistantMsg])
 
       const cityMatch = cityHotspots.find((c) => reply.toLowerCase().includes(c.name.toLowerCase()))
@@ -326,15 +532,37 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
   }
 
   useLayoutEffect(() => {
+    const root = scrollRef.current
+    const content = scrollContentRef.current
+    if (!root) return
+
     const scrollToBottom = () => {
-      const el = scrollRef.current
-      if (el) el.scrollTop = el.scrollHeight
+      root.scrollTop = root.scrollHeight
     }
-    scrollToBottom()
-    const id = requestAnimationFrame(() => {
-      requestAnimationFrame(scrollToBottom)
+
+    let innerRaf = 0
+    const outerRaf = requestAnimationFrame(() => {
+      innerRaf = requestAnimationFrame(scrollToBottom)
     })
-    return () => cancelAnimationFrame(id)
+
+    let ro: ResizeObserver | undefined
+    if (content && typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => {
+        scrollToBottom()
+      })
+      ro.observe(content)
+    }
+
+    const t2 = window.setTimeout(scrollToBottom, 0)
+    const t3 = window.setTimeout(scrollToBottom, 100)
+
+    return () => {
+      cancelAnimationFrame(outerRaf)
+      cancelAnimationFrame(innerRaf)
+      window.clearTimeout(t2)
+      window.clearTimeout(t3)
+      ro?.disconnect()
+    }
   }, [messages, isStreaming, suggestedFollowUps])
 
   const suggestedPrompts = [
@@ -343,109 +571,123 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
     "How to reduce Chicago heat deaths by 30%?",
   ]
 
+  const hideScrollbar =
+    "[scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:h-0 [&::-webkit-scrollbar]:w-0"
+
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10 bg-black/20 flex-shrink-0">
-        <div className="w-8 h-8 rounded-lg bg-lime-400/20 flex items-center justify-center">
-          <Sparkles className="w-4 h-4 text-lime-300" />
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+      <div className="flex shrink-0 items-center gap-3 border-b border-white/10 bg-black/20 px-4 py-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-lime-400/20">
+          <Sparkles className="h-4 w-4 text-lime-300" />
         </div>
         <div>
           <span className="text-sm font-semibold text-white">AI Copilot</span>
           <p className="text-[10px] text-neutral-500">City scenario planner</p>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
-          <div className="w-1.5 h-1.5 rounded-full bg-lime-400 animate-pulse" />
+          <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-lime-400" />
           <span className="text-[10px] text-lime-300">Live</span>
         </div>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 scroll-smooth">
-        {error && (
-          <div className="flex gap-2.5 justify-start">
-            <div className="w-7 h-7 rounded-full bg-red-400/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-              <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+      <div
+        ref={scrollRef}
+        className={`min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain scroll-smooth ${hideScrollbar}`}
+      >
+        <div ref={scrollContentRef} className="space-y-4 p-4 pb-3">
+          {error && (
+            <div className="flex gap-2.5 justify-start">
+              <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-red-400/20">
+                <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
+              </div>
+              <div className="max-w-[85%] rounded-2xl border border-red-400/30 bg-red-400/10 px-3.5 py-2.5 text-sm text-red-400">{error}</div>
             </div>
-            <div className="max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm bg-red-400/10 text-red-400 border border-red-400/30">{error}</div>
-          </div>
-        )}
-        {messages.length === 0 && !error ? (
-          <div className="h-full flex flex-col items-center justify-center text-center gap-4 py-4">
-            <Bot className="w-10 h-10 text-lime-300/30" />
-            <p className="text-neutral-500 text-xs max-w-[200px]">Ask about any city scenario — heat risk, floods, infrastructure, or resource planning.</p>
-            <div className="flex flex-col gap-2 w-full">
-              {suggestedPrompts.map((prompt) => (
+          )}
+          {messages.length === 0 && !error ? (
+            <div className="flex min-h-[200px] flex-col items-center justify-center gap-4 py-10 text-center">
+              <Bot className="h-10 w-10 text-lime-300/30" />
+              <p className="max-w-[200px] text-xs text-neutral-500">
+                Ask about any city scenario — heat risk, floods, infrastructure, or resource planning.
+              </p>
+              <div className="flex w-full flex-col gap-2">
+                {suggestedPrompts.map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    onClick={() => setInput(prompt)}
+                    className="rounded-lg border border-lime-300/20 px-3 py-2 text-left text-[11px] text-lime-300/70 transition-all hover:border-lime-300/40 hover:bg-lime-300/10"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            messages.map((msg) => (
+              <div key={msg.id} className={`flex gap-2.5 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                {msg.role === "assistant" && (
+                  <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-lime-400/20">
+                    <Bot className="h-3.5 w-3.5 text-lime-300" />
+                  </div>
+                )}
+                {msg.role === "assistant" ? (
+                  <div
+                    className="w-full min-w-0 max-w-full rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm leading-relaxed break-words text-white [&_*:last-child]:mb-0"
+                    dangerouslySetInnerHTML={{ __html: markdownToAssistantHtml(msg.content) }}
+                  />
+                ) : (
+                  <div className="max-w-[85%] rounded-2xl bg-lime-400 px-3.5 py-2.5 text-sm font-medium leading-relaxed break-words text-black">
+                    {msg.content}
+                  </div>
+                )}
+                {msg.role === "user" && (
+                  <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-white/10">
+                    <User className="h-3.5 w-3.5 text-white" />
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+          {isStreaming && messages[messages.length - 1]?.role !== "assistant" && (
+            <div className="flex gap-2.5 justify-start">
+              <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-lime-400/20">
+                <Bot className="h-3.5 w-3.5 text-lime-300" />
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5">
+                <div className="flex gap-1">
+                  {[0, 150, 300].map((delay) => (
+                    <div
+                      key={delay}
+                      className="h-1.5 w-1.5 animate-bounce rounded-full bg-lime-300"
+                      style={{ animationDelay: `${delay}ms` }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {suggestedFollowUps.length > 0 && !isStreaming && (
+            <div className="flex flex-col gap-1.5 pt-1">
+              {suggestedFollowUps.map((prompt, i) => (
                 <button
-                  key={prompt}
-                  onClick={() => setInput(prompt)}
-                  className="text-left text-[11px] text-lime-300/70 border border-lime-300/20 rounded-lg px-3 py-2 hover:bg-lime-300/10 hover:border-lime-300/40 transition-all"
+                  key={i}
+                  type="button"
+                  onClick={() => {
+                    setInput(prompt)
+                    setSuggestedFollowUps([])
+                  }}
+                  className="rounded-lg border border-lime-300/20 px-3 py-2 text-left text-[11px] text-lime-300/70 transition-all hover:border-lime-300/40 hover:bg-lime-300/10"
                 >
                   {prompt}
                 </button>
               ))}
             </div>
-          </div>
-        ) : (
-          messages.map((msg) => (
-            <div key={msg.id} className={`flex gap-2.5 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-              {msg.role === "assistant" && (
-                <div className="w-7 h-7 rounded-full bg-lime-400/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <Bot className="w-3.5 h-3.5 text-lime-300" />
-                </div>
-              )}
-              <div
-                className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${msg.role === "user" ? "bg-lime-400 text-black font-medium" : "bg-white/5 text-white border border-white/10"}`}
-                dangerouslySetInnerHTML={{
-                  __html: msg.content
-                    .replace(/^## (.+)$/gm, '<h3 style="color:white;font-weight:700;font-size:14px;margin:12px 0 6px;">$1</h3>')
-                    .replace(/^### (.+)$/gm, '<h4 style="color:rgba(255,255,255,0.8);font-weight:600;font-size:13px;margin:10px 0 4px;">$1</h4>')
-                    .replace(/^---$/gm, '<hr style="border-color:rgba(255,255,255,0.1);margin:10px 0;"/>')
-                    .replace(/^\* (.+)$/gm, '<div style="display:flex;gap:6px;margin-bottom:4px;"><span style="color:#a3e635;">•</span><span>$1</span></div>')
-                    .replace(/^(\d+)\. (.+)$/gm, '<div style="display:flex;gap:6px;margin-bottom:4px;"><span style="color:#a3e635;font-weight:700;">$1.</span><span>$2</span></div>')
-                    .replace(/\*\*(.*?)\*\*/g, '<strong style="color:white;">$1</strong>')
-                    .replace(/\*(.*?)\*/g, '<em>$1</em>')
-                    .replace(/\n/g, '<br/>')
-                }}
-              />
-              {msg.role === "user" && (
-                <div className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <User className="w-3.5 h-3.5 text-white" />
-                </div>
-              )}
-            </div>
-          ))
-        )}
-        {isStreaming && messages[messages.length - 1]?.role !== "assistant" && (
-          <div className="flex gap-2.5 justify-start">
-            <div className="w-7 h-7 rounded-full bg-lime-400/20 flex items-center justify-center flex-shrink-0">
-              <Bot className="w-3.5 h-3.5 text-lime-300" />
-            </div>
-            <div className="bg-white/5 border border-white/10 rounded-2xl px-3.5 py-2.5">
-              <div className="flex gap-1">
-                {[0, 150, 300].map((delay) => (
-                  <div key={delay} className="w-1.5 h-1.5 rounded-full bg-lime-300 animate-bounce" style={{ animationDelay: `${delay}ms` }} />
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-      {suggestedFollowUps.length > 0 && !isStreaming && (
-        <div className="px-3 pb-2 flex flex-col gap-1.5">
-          {suggestedFollowUps.map((prompt, i) => (
-            <button
-              key={i}
-              onClick={() => {
-                setInput(prompt)
-                setSuggestedFollowUps([])
-              }}
-              className="text-left text-[11px] text-lime-300/70 border border-lime-300/20 rounded-lg px-3 py-2 hover:bg-lime-300/10 hover:border-lime-300/40 transition-all"
-            >
-              {prompt}
-            </button>
-          ))}
+          )}
         </div>
-      )}
-      <div className="px-3 py-3 border-t border-white/10 bg-black/20 flex-shrink-0">
+      </div>
+
+      <div className="shrink-0 border-t border-white/10 bg-black/20 px-3 py-3">
         <div className="flex items-center gap-2">
           <input
             type="text"
@@ -454,15 +696,16 @@ function AICopilotChat({ onSimResult }: { onSimResult: (result: SimResult) => vo
             onKeyDown={handleKey}
             placeholder="Ask about any city scenario..."
             disabled={isStreaming}
-            className="flex-1 bg-white/5 border border-white/10 rounded-full px-3.5 py-2 text-xs text-white placeholder:text-neutral-500 focus:outline-none focus:border-lime-300/50 transition-colors disabled:opacity-50"
+            className="flex-1 rounded-full border border-white/10 bg-white/5 px-3.5 py-2 text-xs text-white placeholder:text-neutral-500 transition-colors focus:border-lime-300/50 focus:outline-none disabled:opacity-50"
           />
           <button
+            type="button"
             onClick={handleSend}
             disabled={isStreaming || !input.trim()}
-            className="w-8 h-8 rounded-full bg-lime-400 flex items-center justify-center hover:bg-lime-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-lime-400 transition-colors hover:bg-lime-300 disabled:cursor-not-allowed disabled:opacity-40"
             aria-label="Send message"
           >
-            <Send className="w-3.5 h-3.5 text-black" />
+            <Send className="h-3.5 w-3.5 text-black" />
           </button>
         </div>
       </div>
@@ -550,7 +793,7 @@ function LiveSimulationFeed() {
   }, [fetchHistory])
 
   return (
-    <div className="liquid-glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full min-h-[520px]">
+    <div className="liquid-glass flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-white/10">
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10 bg-black/20 flex-shrink-0">
         <div className="w-8 h-8 rounded-lg bg-blue-400/20 flex items-center justify-center">
@@ -690,8 +933,8 @@ function InterventionPlan({ simResult }: { simResult: SimResult | null }) {
       .replace(/\n{2,}/g, '<br/>')
 
   return (
-    <ScrollReveal delay={100} className="mt-10">
-      <div className="max-w-6xl mx-auto liquid-glass rounded-2xl border border-white/10 overflow-hidden">
+    <ScrollReveal delay={100} className="mt-10 w-full">
+      <div className="w-full liquid-glass rounded-2xl border border-white/10 overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 px-6 py-4 border-b border-white/10 bg-black/20">
           <div className="w-9 h-9 rounded-xl bg-lime-400/20 flex items-center justify-center">
@@ -911,11 +1154,11 @@ export function SimulationPreview() {
 
         {/* Map + Chat + Live Feed */}
         <ScrollReveal delay={100}>
-          <div className="max-w-6xl mx-auto">
-            <div className="grid lg:grid-cols-[1fr_340px_280px] gap-5 items-stretch">
-
+          <div className="w-full">
+            <div className="grid min-h-0 grid-cols-1 items-stretch gap-5 min-w-0 lg:grid-cols-[1fr_500px_280px]">
+              {/* Shared max height keeps row aligned; min-h-0 lets overflow scroll inside cells */}
               {/* Left: Leaflet Map */}
-              <div className="liquid-glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full">
+              <div className="liquid-glass flex h-full min-h-[480px] w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 lg:min-h-0 lg:h-[min(680px,78vh)] lg:max-h-[78vh]">
                 <div className="flex items-center justify-between px-5 py-3 border-b border-white/10 bg-black/20 flex-shrink-0">
                   <h3 className="text-sm font-semibold text-white flex items-center gap-2">
                     <MapPin className="w-4 h-4 text-lime-300" />
@@ -960,12 +1203,12 @@ export function SimulationPreview() {
               </div>
 
               {/* Middle: AI Copilot Chat */}
-              <div className="liquid-glass rounded-2xl border border-white/10 overflow-hidden flex flex-col h-full min-h-[620px]">
+              <div className="liquid-glass flex h-full min-h-[480px] w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 lg:min-h-0 lg:h-[min(680px,78vh)] lg:max-h-[78vh]">
                 <AICopilotChat onSimResult={handleSimResult} />
               </div>
 
               {/* Right: Live Simulation Feed */}
-              <div className="hidden lg:flex flex-col h-full">
+              <div className="hidden h-full min-h-0 w-full min-w-0 flex-col overflow-hidden lg:flex lg:h-[min(680px,78vh)] lg:max-h-[78vh]">
                 <LiveSimulationFeed />
               </div>
             </div>
@@ -981,7 +1224,7 @@ export function SimulationPreview() {
         <InterventionPlan simResult={simResult} />
 
         {/* Project Impact */}
-        <ScrollReveal delay={150} className="mt-20">
+        <ScrollReveal delay={150} className="mt-20 w-full">
           <div className="text-center mb-12">
             <p className="text-[11px] tracking-widest text-lime-300/80 mb-2">PROJECT IMPACT</p>
             <h2 className="text-3xl sm:text-4xl font-extrabold text-white mb-4">
@@ -992,7 +1235,7 @@ export function SimulationPreview() {
             </p>
           </div>
 
-          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6 w-full">
             {impactMetrics.map((metric, index) => (
               <ScrollReveal key={metric.label} delay={index * 100}>
                 <div className={`liquid-glass rounded-2xl p-6 h-full border ${metric.borderColor} glass-card-interactive group`}>
